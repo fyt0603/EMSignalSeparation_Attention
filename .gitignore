@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# 训练/可视化生成物（体积大，一般不上传）
+outputs/
+outputs_stft_figure/
+*.pt
+
+# 原始数据目录（通常很大；若需入库可删此行或改用 Git LFS）
+dataset/
+
+# 本地环境
+.env
+.env.*
+
+# IDE（可选）
+.idea/
+.vscode/
