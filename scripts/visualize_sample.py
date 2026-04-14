@@ -37,28 +37,28 @@ def _build_device(device_arg: str | None) -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _resolve_ckpt(cfg: Any, ckpt_arg: str) -> Path:
+def _resolve_ckpt(cfg: Any, ckpt_arg: str, model_name: str) -> Path:
     if ckpt_arg:
         ckpt_path = Path(ckpt_arg)
     else:
-        ckpt_path = cfg.paths.outputs_dir / "checkpoints" / "best_transformer.pt"
+        ckpt_path = cfg.paths.outputs_dir / "checkpoints" / f"best_{model_name}.pt"
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
     return ckpt_path
 
 
-def _resolve_history(cfg: Any, history_arg: str) -> Path:
+def _resolve_history(cfg: Any, history_arg: str, model_name: str) -> Path:
     if history_arg:
         return Path(history_arg)
-    return cfg.paths.outputs_dir / "logs" / "train_history_transformer.json"
+    return cfg.paths.outputs_dir / "logs" / f"train_history_{model_name}.json"
 
 
 def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Module:
     """模型创建与切换入口"""
-    if model_name == "baseline":
-        from models.baseline_separator import BaselineSeparator
+    if model_name == "resnet18d":
+        from models.resnet18d import ResNet18DSeparator
 
-        model = BaselineSeparator()
+        model = ResNet18DSeparator(in_channels=1, out_masks=2)
     elif model_name == "transformer":
         from models.transformer import TransformerSeparator
 
@@ -71,6 +71,18 @@ def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Mo
             ff_dim=cfg.model.ff_dim,
             dropout=cfg.model.dropout,
             patch_size=cfg.model.patch_size,
+        )
+    elif model_name == "lstm":
+        from models.lstm import LSTMSeparator
+
+        model = LSTMSeparator(
+            in_channels=1,
+            out_masks=2,
+            input_freq_bins=cfg.stft.n_fft,
+            hidden_size=cfg.lstm.hidden_size,
+            num_layers=cfg.lstm.num_layers,
+            bidirectional=cfg.lstm.bidirectional,
+            dropout=cfg.lstm.dropout,
         )
     else:
         raise ValueError(f"Unsupported model_name: {model_name}")
@@ -138,17 +150,17 @@ def _plot_and_save_combined_loss_curve(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Visualize one separation sample")
     parser.add_argument("--split", type=str, default="test", choices=["train", "val", "test"])
-    parser.add_argument("--sample_idx", type=int, default=5, help="Sample index in split")
+    parser.add_argument("--sample_idx", type=int, default=100, help="Sample index in split")
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="outputs/checkpoints/best_transformer.pt",
+        default="",
         help="Checkpoint path",
     )
     parser.add_argument(
         "--history_json",
         type=str,
-        default="outputs/logs/train_history_transformer.json",
+        default="",
         help="Training history json",
     )
     parser.add_argument("--device", type=str, default=None, help="Override device, e.g. cuda/cpu")
@@ -156,7 +168,7 @@ def parse_args() -> argparse.Namespace:
         "--model_name",
         type=str,
         default="transformer",
-        choices=["baseline", "transformer"],
+        choices=["resnet18d", "transformer", "lstm"],
         help="Model family",
     )
     return parser.parse_args()
@@ -173,8 +185,8 @@ def main() -> None:
     args = parse_args()
     cfg = get_default_config()
     device = _build_device(args.device)
-    ckpt_path = _resolve_ckpt(cfg, args.ckpt)
-    history_path = _resolve_history(cfg, args.history_json)
+    ckpt_path = _resolve_ckpt(cfg, args.ckpt, args.model_name)
+    history_path = _resolve_history(cfg, args.history_json, args.model_name)
 
     if len(cfg.file_split.drone_codes) < 2:
         raise ValueError("cfg.file_split.drone_codes must contain at least two drone codes.")

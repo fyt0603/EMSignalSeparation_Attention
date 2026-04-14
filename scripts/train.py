@@ -49,13 +49,61 @@ def _dump_log(log_path: Path, history: List[Dict[str, Any]]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train transformer separator")
+    parser = argparse.ArgumentParser(description="Train separator")
     parser.add_argument("--device", type=str, default=None, help="Override device, e.g. cuda/cpu")
     parser.add_argument("--epochs", type=int, default=None, help="Override cfg.train.epochs")
     parser.add_argument("--batch_size", type=int, default=None, help="Override cfg.train.batch_size")
     parser.add_argument("--sir_db", type=float, default=None, help="Override cfg.train.sir_db")
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default=None,
+        choices=["resnet18d", "transformer", "lstm"],
+        help="Override model name",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     return parser.parse_args()
+
+
+def _resolve_model_name(args: argparse.Namespace) -> str:
+    if args.model_name is not None:
+        return str(args.model_name)
+    return "transformer"
+
+
+def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Module:
+    if model_name == "resnet18d":
+        from models.resnet18d import ResNet18DSeparator
+
+        model = ResNet18DSeparator(in_channels=1, out_masks=2)
+    elif model_name == "transformer":
+        from models.transformer import TransformerSeparator
+
+        model = TransformerSeparator(
+            in_channels=1,
+            out_masks=2,
+            embed_dim=cfg.model.d_model,
+            depth=cfg.model.num_layers,
+            num_heads=cfg.model.n_heads,
+            ff_dim=cfg.model.ff_dim,
+            dropout=cfg.model.dropout,
+            patch_size=cfg.model.patch_size,
+        )
+    elif model_name == "lstm":
+        from models.lstm import LSTMSeparator
+
+        model = LSTMSeparator(
+            in_channels=1,
+            out_masks=2,
+            input_freq_bins=cfg.stft.n_fft,
+            hidden_size=cfg.lstm.hidden_size,
+            num_layers=cfg.lstm.num_layers,
+            bidirectional=cfg.lstm.bidirectional,
+            dropout=cfg.lstm.dropout,
+        )
+    else:
+        raise ValueError(f"Unsupported model_name: {model_name}")
+    return model.to(device)
 
 
 def main() -> None:
@@ -65,13 +113,12 @@ def main() -> None:
     from data.dataset import DroneSeparationDataset
     from engine.trainer import train_one_epoch, validate_one_epoch
     from losses.separation_loss import SeparationLoss
-    from models.transformer import TransformerSeparator
-
     args = parse_args()
     cfg = get_default_config()
     _set_seed(args.seed)
 
     device = _build_device(args.device)
+    model_name = _resolve_model_name(args)
     epochs = int(args.epochs if args.epochs is not None else cfg.train.epochs)
     batch_size = int(args.batch_size if args.batch_size is not None else cfg.train.batch_size)
     sir_db = float(args.sir_db if args.sir_db is not None else cfg.train.sir_db)
@@ -122,16 +169,7 @@ def main() -> None:
         pin_memory=torch.cuda.is_available(),
     )
 
-    model = TransformerSeparator(
-        in_channels=1,
-        out_masks=2,
-        embed_dim=cfg.model.d_model,
-        depth=cfg.model.num_layers,
-        num_heads=cfg.model.n_heads,
-        ff_dim=cfg.model.ff_dim,
-        dropout=cfg.model.dropout,
-        patch_size=cfg.model.patch_size,
-    ).to(device)
+    model = _build_model(model_name=model_name, cfg=cfg, device=device)
     criterion = SeparationLoss(
         mag_loss_weight=cfg.loss.mag_loss_weight,
         mask_loss_weight=cfg.loss.mask_loss_weight,
@@ -150,9 +188,11 @@ def main() -> None:
 
     best_val_total = float("inf")
     history: List[Dict[str, Any]] = []
+    history_filename = f"train_history_{model_name}.json"
+    best_ckpt_filename = f"best_{model_name}.pt"
 
     print("=== Train Start ===")
-    print("model=TransformerSeparator")
+    print(f"model={model_name}")
     print(f"device={device}, epochs={epochs}, batch_size={batch_size}, sir_db={sir_db}")
     print(f"source_a={source_a_code}, source_b={source_b_code}")
     print(f"train_size={len(train_dataset)}, val_size={len(val_dataset)}")
@@ -199,7 +239,7 @@ def main() -> None:
 
         if record["val_total_loss"] < best_val_total:
             best_val_total = record["val_total_loss"]
-            best_ckpt_path = ckpt_dir / "best_transformer.pt"
+            best_ckpt_path = ckpt_dir / best_ckpt_filename
             torch.save(
                 {
                     "epoch": epoch,
@@ -214,11 +254,11 @@ def main() -> None:
             )
             print(f"  -> New best checkpoint saved: {best_ckpt_path}")
 
-        _dump_log(log_dir / "train_history_transformer.json", history)
+        _dump_log(log_dir / history_filename, history)
 
     print("=== Train Done ===")
     print(f"best_val_total_loss={best_val_total:.6f}")
-    print(f"log_path={log_dir / 'train_history_transformer.json'}")
+    print(f"log_path={log_dir / history_filename}")
 
 
 if __name__ == "__main__":

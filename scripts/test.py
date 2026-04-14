@@ -33,20 +33,68 @@ def _build_device(device_arg: str | None) -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _resolve_ckpt_path(cfg: Any, ckpt_arg: str) -> Path:
+def _resolve_model_name(args: argparse.Namespace) -> str:
+    if args.model_name is not None:
+        return str(args.model_name)
+    return "transformer"
+
+
+def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Module:
+    if model_name == "resnet18d":
+        from models.resnet18d import ResNet18DSeparator
+
+        model = ResNet18DSeparator(in_channels=1, out_masks=2)
+    elif model_name == "transformer":
+        from models.transformer import TransformerSeparator
+
+        model = TransformerSeparator(
+            in_channels=1,
+            out_masks=2,
+            embed_dim=cfg.model.d_model,
+            depth=cfg.model.num_layers,
+            num_heads=cfg.model.n_heads,
+            ff_dim=cfg.model.ff_dim,
+            dropout=cfg.model.dropout,
+            patch_size=cfg.model.patch_size,
+        )
+    elif model_name == "lstm":
+        from models.lstm import LSTMSeparator
+
+        model = LSTMSeparator(
+            in_channels=1,
+            out_masks=2,
+            input_freq_bins=cfg.stft.n_fft,
+            hidden_size=cfg.lstm.hidden_size,
+            num_layers=cfg.lstm.num_layers,
+            bidirectional=cfg.lstm.bidirectional,
+            dropout=cfg.lstm.dropout,
+        )
+    else:
+        raise ValueError(f"Unsupported model_name: {model_name}")
+    return model.to(device)
+
+
+def _resolve_ckpt_path(cfg: Any, ckpt_arg: str, model_name: str) -> Path:
     if ckpt_arg:
         ckpt_path = Path(ckpt_arg)
     else:
-        ckpt_path = cfg.paths.outputs_dir / "checkpoints" / "best_transformer.pt"
+        ckpt_path = cfg.paths.outputs_dir / "checkpoints" / f"best_{model_name}.pt"
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
     return ckpt_path
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Test transformer separator")
+    parser = argparse.ArgumentParser(description="Test separator")
     parser.add_argument("--ckpt", type=str, default="", help="Checkpoint path")
     parser.add_argument("--device", type=str, default=None, help="Override device, e.g. cuda/cpu")
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default=None,
+        choices=["resnet18d", "transformer", "lstm"],
+        help="Override model name",
+    )
     parser.add_argument(
         "--detail_samples",
         type=int,
@@ -62,11 +110,11 @@ def main() -> None:
     from configs.config import get_default_config
     from data.dataset import DroneSeparationDataset
     from engine.evaluator import evaluate_separator
-    from models.transformer import TransformerSeparator
 
     args = parse_args()
     cfg = get_default_config()
     device = _build_device(args.device)
+    model_name = _resolve_model_name(args)
 
     if len(cfg.file_split.drone_codes) < 2:
         raise ValueError("cfg.file_split.drone_codes must contain at least two codes.")
@@ -97,17 +145,8 @@ def main() -> None:
         pin_memory=torch.cuda.is_available(),
     )
 
-    model = TransformerSeparator(
-        in_channels=1,
-        out_masks=2,
-        embed_dim=cfg.model.d_model,
-        depth=cfg.model.num_layers,
-        num_heads=cfg.model.n_heads,
-        ff_dim=cfg.model.ff_dim,
-        dropout=cfg.model.dropout,
-        patch_size=cfg.model.patch_size,
-    ).to(device)
-    ckpt_path = _resolve_ckpt_path(cfg, args.ckpt)
+    model = _build_model(model_name=model_name, cfg=cfg, device=device)
+    ckpt_path = _resolve_ckpt_path(cfg, args.ckpt, model_name=model_name)
     ckpt = torch.load(ckpt_path, map_location=device)
     if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
         model.load_state_dict(ckpt["model_state_dict"])
@@ -127,7 +166,7 @@ def main() -> None:
     )
 
     print("=== Test Result ===")
-    print("model         : TransformerSeparator")
+    print(f"model         : {model_name}")
     print(f"checkpoint    : {ckpt_path}")
     print(f"device        : {device}")
     print(f"source_a_code : {source_a_code}")
@@ -140,7 +179,7 @@ def main() -> None:
 
     log_dir = cfg.paths.outputs_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    out_path = log_dir / "test_result_transformer.json"
+    out_path = log_dir / f"test_result_{model_name}.json"
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     print(f"saved_json    : {out_path}")

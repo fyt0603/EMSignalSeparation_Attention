@@ -101,6 +101,16 @@ class ModelConfig:
 
 
 @dataclass
+class LSTMConfig:
+    """LSTM 分离模型配置。"""
+
+    hidden_size: int = 256
+    num_layers: int = 2
+    bidirectional: bool = True
+    dropout: float = 0.1
+
+
+@dataclass
 class TrainConfig:
     """训练超参数配置。"""
 
@@ -136,6 +146,7 @@ class ExperimentConfig:
     data: DataConfig = field(default_factory=DataConfig)
     stft: STFTConfig = field(default_factory=STFTConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
+    lstm: LSTMConfig = field(default_factory=LSTMConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     numeric: NumericConfig = field(default_factory=NumericConfig)

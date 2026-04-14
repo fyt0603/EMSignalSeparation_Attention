@@ -60,7 +60,7 @@ def main() -> None:
     from configs.config import get_default_config
     from data.dataset import DroneSeparationDataset
     from losses.separation_loss import SeparationLoss
-    from models.baseline_separator import BaselineSeparator
+    from models.resnet18d import ResNet18DSeparator
 
     cfg = get_default_config()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -100,15 +100,19 @@ def main() -> None:
     _print_batch_info(batch)
     batch = _to_device(batch, device)
 
-    model = BaselineSeparator().to(device)
-    criterion = SeparationLoss(mask_loss_weight=cfg.loss.mask_loss_weight).to(device)
+    model = ResNet18DSeparator(in_channels=1, out_masks=2).to(device)
+    criterion = SeparationLoss(
+        mag_loss_weight=cfg.loss.mag_loss_weight,
+        mask_loss_weight=cfg.loss.mask_loss_weight,
+        corr_loss_weight=cfg.loss.corr_loss_weight,
+    ).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=cfg.train.learning_rate,
         weight_decay=cfg.train.weight_decay,
     )
 
-    steps = 5000
+    steps = 1000
     print_every = 10
     initial_loss: float = -1.0
     final_loss: float = -1.0
@@ -124,6 +128,9 @@ def main() -> None:
             mix_spec=batch["mix_spec"],
             srcA_spec=batch["srcA_spec"],
             srcB_spec=batch["srcB_spec"],
+            srcA_time=batch["srcA_time"],
+            srcB_time=batch["srcB_time"],
+            cfg=cfg,
         )
         total_loss = loss_dict["total_loss"]
         total_loss.backward()
@@ -137,7 +144,8 @@ def main() -> None:
                 f"step={step:03d}  "
                 f"total={loss_val:.6f}  "
                 f"mag={float(loss_dict['mag_loss'].detach().item()):.6f}  "
-                f"mask={float(loss_dict['mask_loss'].detach().item()):.6f}"
+                f"mask={float(loss_dict['mask_loss'].detach().item()):.6f}  "
+                f"corr={float(loss_dict['corr_loss'].detach().item()):.6f}"
             )
         final_loss = loss_val
 
