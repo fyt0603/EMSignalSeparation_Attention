@@ -9,7 +9,7 @@ TransformerSeparator 维度流转：
 2) PatchEmbed：`[B, N, D]`（内部自动 padding）
 3) + 位置编码，TransformerEncoder：`[B, N, D]`
 4) token -> grid：`[B, D, grid_f, grid_t]`
-5) ConvTranspose2d 解码：`[B, 2, F_pad, T_pad]`
+5) 解码：`[B, 2, F_pad, T_pad]`
 6) 按原始尺寸裁剪：`[B, 2, F, T]`
 7) 源维 softmax：`[B, 2, F, T]`
 """
@@ -17,9 +17,12 @@ TransformerSeparator 维度流转：
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
+from models.cnn_skip import CNNSkipEncoder
 from models.patch_embed import PatchEmbed2D
+from models.unet_decoder import UNetDecoder
 
 
 class TransformerEncoderBlocks(nn.Module):
@@ -27,7 +30,7 @@ class TransformerEncoderBlocks(nn.Module):
 
     def __init__(
         self,
-        d_model: int = 256,
+        d_model: int = 256, # 输入token的维度
         n_heads: int = 8,
         num_layers: int = 4,
         ff_dim: int = 1024,
@@ -91,14 +94,20 @@ class TransformerSeparator(nn.Module):
         dropout: float = 0.1,
         patch_size: int = 16,
         max_tokens: int = 4096,
+        decoder_type: str = "unet",
+        use_cnn_skip: bool = True,
     ) -> None:
         super().__init__()
         if out_masks != 2:
             raise ValueError(f"Current project expects out_masks=2, got {out_masks}")
+        if decoder_type not in ("deconv", "unet"):
+            raise ValueError(f"decoder_type must be 'deconv' or 'unet', got {decoder_type}")
 
         self.out_masks = out_masks
         self.embed_dim = embed_dim
         self.max_tokens = max_tokens
+        self.decoder_type = decoder_type
+        self.use_cnn_skip = use_cnn_skip
 
         self.patch_embed = PatchEmbed2D(
             in_channels=in_channels,
@@ -118,7 +127,7 @@ class TransformerSeparator(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, max_tokens, embed_dim))
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
 
-        # 反 patch 化解码头：grid -> padded 频时图
+        # deconv 分支：反 patch 化解码头（grid -> padded 频时图）
         self.decode_head = nn.ConvTranspose2d(
             in_channels=embed_dim,
             out_channels=out_masks,
@@ -126,6 +135,11 @@ class TransformerSeparator(nn.Module):
             stride=(self.patch_embed.patch_freq, self.patch_embed.patch_time),
             padding=0,
         )
+
+        # unet 分支：先把 grid feature 投影到 256 通道，再经 U-Net decoder
+        self.bottleneck_proj = nn.Conv2d(embed_dim, 256, kernel_size=1)
+        self.unet_decoder = UNetDecoder(out_channels=out_masks, use_skips=use_cnn_skip)
+        self.cnn_skip = CNNSkipEncoder() if use_cnn_skip else None
 
     def _add_pos_embed(self, tokens: torch.Tensor) -> torch.Tensor:
         """给 `[B, N, D]` token 添加位置编码。"""
@@ -163,8 +177,28 @@ class TransformerSeparator(nn.Module):
         # 3) token -> grid feature map
         grid_feat = self.patch_embed.tokens_to_grid(tokens, meta=meta)  # [B, D, grid_f, grid_t]
 
-        # 4) 反 patch 化到 padded mask
-        mask_logits_pad = self.decode_head(grid_feat)  # [B, 2, F_pad, T_pad]
+        # 4) 解码到 padded mask
+        if self.decoder_type == "deconv":
+            mask_logits_pad = self.decode_head(grid_feat)  # [B, 2, F_pad, T_pad]
+        else:
+            # 4.1) bottleneck 投影到 256 通道
+            bottleneck = self.bottleneck_proj(grid_feat)  # [B, 256, grid_f, grid_t]
+
+            # 4.2) 可选 CNN skip（x_pad 使用与 PatchEmbed 相同的补零量）
+            skips = None
+            if self.use_cnn_skip:
+                if self.cnn_skip is None:
+                    raise RuntimeError("use_cnn_skip=True but cnn_skip is not initialized.")
+                pad_f = int(meta["pad_f"])
+                pad_t = int(meta["pad_t"])
+                if pad_f > 0 or pad_t > 0:
+                    x_pad = F.pad(mix_logmag, (0, pad_t, 0, pad_f), mode="constant", value=0.0)
+                else:
+                    x_pad = mix_logmag
+                skips = self.cnn_skip(x_pad)  # (s1, s2, s3, s4)
+
+            # 4.3) U-Net 解码
+            mask_logits_pad = self.unet_decoder(bottleneck, skips=skips)  # [B, 2, F_pad, T_pad]
 
         # 5) 裁剪回原始尺寸
         orig_f = int(meta["orig_f"])

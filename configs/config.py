@@ -114,7 +114,7 @@ class LSTMConfig:
 class TrainConfig:
     """训练超参数配置。"""
 
-    batch_size: int = 16
+    batch_size: int = 8
     learning_rate: float = 1e-4
     epochs: int = 50
     weight_decay: float = 1e-4
