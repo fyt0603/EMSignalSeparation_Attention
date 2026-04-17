@@ -18,7 +18,7 @@ from torch.utils.data import Dataset
 
 from configs.config import ExperimentConfig, get_default_config
 from data.io_utils import read_complex_rf0
-from data.stft_utils import compute_stft, spec_to_logmag
+from data.stft_utils import compute_stft, spec_to_input_features
 
 Split = Literal["train", "val", "test"]
 
@@ -176,14 +176,14 @@ class DroneSeparationDataset(Dataset):
         src_a_spec = compute_stft(src_a_scaled, self.cfg)
         src_b_spec = compute_stft(src_b_scaled, self.cfg)
 
-        # 5) 输入特征（对数幅度谱 [1, F, T]）
-        mix_mag = spec_to_logmag(mix_spec, eps=self.eps)
+        # 5) 输入特征（三通道 [log|X|, sinφ, cosφ]，shape [3, F, T]）
+        mix_feat = spec_to_input_features(mix_spec, eps=self.eps)
 
         # 6) 监督目标 IRM（基于缩放后真实源频谱）
         mask_target = _build_irm(src_a_spec, src_b_spec, eps=self.eps)  # [2, F, T]
 
         return {
-            "mix_mag": mix_mag.to(torch.float32),                 # [1, F, T]
+            "mix_feat": mix_feat.to(torch.float32),               # [3, F, T]
             "mix_spec": mix_spec.to(torch.complex64),             # [F, T]
             "srcA_spec": src_a_spec.to(torch.complex64),          # [F, T]
             "srcB_spec": src_b_spec.to(torch.complex64),          # [F, T]

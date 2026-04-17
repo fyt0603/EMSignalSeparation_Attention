@@ -97,7 +97,7 @@ def main() -> None:
     batch = _to_device(batch, device)
 
     model = TransformerSeparator(
-        in_channels=1,
+        in_channels=3,
         out_masks=2,
         embed_dim=cfg.model.d_model,
         depth=cfg.model.num_layers,
@@ -126,7 +126,7 @@ def main() -> None:
     for step in range(1, steps + 1):
         optimizer.zero_grad(set_to_none=True)
 
-        pred_mask = model(batch["mix_mag"])  # [B, 2, F, T]
+        pred_mask = model(batch["mix_feat"])  # mix_feat: [B, 3, F, T] -> pred_mask: [B, 2, F, T]
         loss_dict = criterion(
             pred_mask=pred_mask,
             target_mask=batch["mask_target"],

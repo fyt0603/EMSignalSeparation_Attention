@@ -1,14 +1,17 @@
-"""STFT 与对数幅度谱工具。
+"""STFT / iSTFT 与输入特征构造工具。
 
 职责：
 - 计算复基带信号 STFT（复数谱）。
-- 将复数谱转换为对数幅度谱。
-- 将时频图补齐/裁剪到统一尺寸。
+- iSTFT 将复数谱还原为时域复信号（用于评估/可视化）。
+- 将复数谱转换为对数幅度谱，或构造三通道输入特征：
+  `[log|X|, sinφ, cosφ]`。
+- `pad_or_crop_spectrogram` 当前主要用于调试/对齐尺寸（训练与模型主链路暂未依赖）。
 
-维度约定：
-- `compute_stft` 输出复数谱：`[F, T]`
-- `spec_to_logmag` 输出对数幅度谱：`[1, F, T]`
-- `pad_or_crop_spectrogram` 输入输出建议使用：`[1, F, T]`
+维度约定（核心函数）：
+- `compute_stft`：输入 `[N]` -> 输出复数谱 `[F, T]`
+- `spec_to_logmag`：输入复数谱 `[F, T]` -> 输出 `[1, F, T]`
+- `spec_to_input_features`：输入复数谱 `[F, T]`/`[B, F, T]` -> 输出 `[3, F, T]`/`[B, 3, F, T]`
+- `istft_reconstruct`：输入复数谱 `[F, T]`/`[B, F, T]` -> 输出 `[N]`/`[B, N]`
 """
 
 from dataclasses import dataclass
@@ -198,6 +201,47 @@ def spec_to_logmag(X: SpecLike, eps: float = 1e-8) -> torch.Tensor:
     mag = torch.abs(X_t).to(torch.float32)
     logmag = torch.log(mag + float(eps))
     return logmag.unsqueeze(0)  # [1, F, T]
+
+
+def spec_to_input_features(spec: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """将复数 STFT 谱转换为三通道输入特征。
+
+    通道定义（顺序固定）：
+    1) logmag = log(|X| + eps)
+    2) sin_phi = imag(X) / (|X| + eps)
+    3) cos_phi = real(X) / (|X| + eps)
+
+    Args:
+        spec: 复数谱张量，支持以下形状：
+            - [F, T]
+            - [B, F, T]
+        eps: 数值稳定项，防止 log(0) 与除零。
+
+    Returns:
+        torch.Tensor:
+            - 输入 [F, T]  -> 输出 [3, F, T]
+            - 输入 [B, F, T] -> 输出 [B, 3, F, T]
+    """
+    if not isinstance(spec, torch.Tensor):
+        raise TypeError(f"spec must be torch.Tensor, got {type(spec)}")
+    if not torch.is_complex(spec):
+        raise TypeError("spec_to_input_features expects complex tensor input.")
+    if spec.ndim not in (2, 3):
+        raise ValueError(f"Expected spec shape [F,T] or [B,F,T], got {tuple(spec.shape)}")
+
+    mag = torch.abs(spec).to(torch.float32)
+    denom = mag + float(eps)
+
+    logmag = torch.log(denom)
+    sin_phi = spec.imag.to(torch.float32) / denom
+    cos_phi = spec.real.to(torch.float32) / denom
+
+    if spec.ndim == 2:
+        # [F, T] -> [3, F, T]
+        return torch.stack([logmag, sin_phi, cos_phi], dim=0)
+
+    # [B, F, T] -> [B, 3, F, T]
+    return torch.stack([logmag, sin_phi, cos_phi], dim=1)
 
 
 def pad_or_crop_spectrogram(

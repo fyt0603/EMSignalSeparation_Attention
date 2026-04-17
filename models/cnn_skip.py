@@ -92,7 +92,7 @@ class CNNSkipEncoder(nn.Module):
     """CNN skip 编码器。
 
     输入：
-    - x_pad: [B, 1, F_pad, T_pad]
+    - x_pad: [B, C, F_pad, T_pad]（`C = in_channels`，当前三通道输入可设为 3）
 
     输出：
     - s1: [B, 32, F_pad,   T_pad]
@@ -101,18 +101,22 @@ class CNNSkipEncoder(nn.Module):
     - s4: [B, 256, F_pad/8, T_pad/8]
     """
 
-    def __init__(self) -> None:
+    def __init__(self, in_channels: int = 3) -> None:
         super().__init__()
-        self.stem = ConvBlock(1, 32)
+        if in_channels <= 0:
+            raise ValueError(f"in_channels must be > 0, got {in_channels}")
+        self.in_channels = in_channels
+
+        self.stem = ConvBlock(in_channels, 32)
         self.down1 = DownBlock(32, 64)
         self.down2 = DownBlock(64, 128)
         self.down3 = DownBlock(128, 256)
 
     def forward(self, x_pad: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if x_pad.ndim != 4:
-            raise ValueError(f"Expected x_pad shape [B,1,F_pad,T_pad], got {tuple(x_pad.shape)}")
-        if x_pad.shape[1] != 1:
-            raise ValueError(f"Expected input channel=1, got {x_pad.shape[1]}")
+            raise ValueError(f"Expected x_pad shape [B,C,F_pad,T_pad], got {tuple(x_pad.shape)}")
+        if x_pad.shape[1] != self.in_channels:
+            raise ValueError(f"Expected input channel={self.in_channels}, got {x_pad.shape[1]}")
 
         s1 = self.stem(x_pad)
         s2 = self.down1(s1)

@@ -48,7 +48,7 @@ def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Mo
         from models.transformer import TransformerSeparator
 
         model = TransformerSeparator(
-            in_channels=1,
+            in_channels=3,  # mix_feat: [logmag, sin_phi, cos_phi]
             out_masks=2,
             embed_dim=cfg.model.d_model,
             depth=cfg.model.num_layers,

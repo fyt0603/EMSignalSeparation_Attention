@@ -17,7 +17,7 @@ from engine.metrics import complex_corr
 
 
 REQUIRED_EVAL_KEYS = (
-    "mix_mag",
+    "mix_feat",
     "mix_spec",
     "srcA_spec",
     "srcB_spec",
@@ -43,15 +43,15 @@ def _require_eval_keys(batch: Mapping[str, Any]) -> None:
 
 
 def _validate_eval_shapes(batch: Mapping[str, Any]) -> None:
-    mix_mag = batch["mix_mag"]
+    mix_feat = batch["mix_feat"]
     mix_spec = batch["mix_spec"]
     srcA_spec = batch["srcA_spec"]
     srcB_spec = batch["srcB_spec"]
     srcA_time = batch["srcA_time"]
     srcB_time = batch["srcB_time"]
 
-    if mix_mag.ndim != 4 or mix_mag.shape[1] != 1:
-        raise ValueError(f"mix_mag must be [B,1,F,T], got {tuple(mix_mag.shape)}")
+    if mix_feat.ndim != 4 or mix_feat.shape[1] != 3:
+        raise ValueError(f"mix_feat must be [B,3,F,T], got {tuple(mix_feat.shape)}")
     if mix_spec.ndim != 3:
         raise ValueError(f"mix_spec must be [B,F,T], got {tuple(mix_spec.shape)}")
     if srcA_spec.shape != mix_spec.shape or srcB_spec.shape != mix_spec.shape:
@@ -67,8 +67,8 @@ def _validate_eval_shapes(batch: Mapping[str, Any]) -> None:
         raise ValueError(
             f"srcA_time/srcB_time shape mismatch: {tuple(srcA_time.shape)} vs {tuple(srcB_time.shape)}"
         )
-    if srcA_time.shape[0] != mix_mag.shape[0]:
-        raise ValueError("Batch size mismatch between mix_mag and srcA_time.")
+    if srcA_time.shape[0] != mix_feat.shape[0]:
+        raise ValueError("Batch size mismatch between mix_feat and srcA_time.")
 
 
 @torch.no_grad()
@@ -83,7 +83,7 @@ def evaluate_separator(
     """评估分离模型并返回复相关系数指标。
 
     Args:
-        model: 分离模型，输入 `[B,1,F,T]`，输出 `[B,2,F,T]`。
+        model: 分离模型，输入特征图 `mix_feat`，shape `[B,3,F,T]`，输出 `[B,2,F,T]`。
         dataloader: 验证或测试 dataloader。
         device: 计算设备。
         cfg: 配置对象（供 iSTFT 参数与 window_len 使用）。
@@ -112,7 +112,7 @@ def evaluate_separator(
         _validate_eval_shapes(batch)
 
         # 1) 模型推理预测 mask
-        pred_mask = model(batch["mix_mag"])  # [B, 2, F, T]
+        pred_mask = model(batch["mix_feat"])  # [B, 2, F, T]
 
         # 2) 按 mask 与 mix_spec 重建预测源谱
         pred_srcA_spec = pred_mask[:, 0, :, :] * batch["mix_spec"]  # [B, F, T]

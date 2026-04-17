@@ -63,7 +63,7 @@ def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Mo
         from models.transformer import TransformerSeparator
 
         model = TransformerSeparator(
-            in_channels=1,
+            in_channels=3,
             out_masks=2,
             embed_dim=cfg.model.d_model,
             depth=cfg.model.num_layers,
@@ -215,8 +215,8 @@ def main() -> None:
     _load_checkpoint(model, ckpt_path, device)
     model.eval()
 
-    # 单样本加 batch 维
-    mix_mag = sample["mix_mag"].unsqueeze(0).to(device)          # [1,1,F,T]
+    # 单样本加 batch 维。mix_feat 三通道顺序固定为 [logmag, sin_phi, cos_phi]
+    mix_feat = sample["mix_feat"].unsqueeze(0).to(device)        # [1,3,F,T]
     mix_spec = sample["mix_spec"].unsqueeze(0).to(device)        # [1,F,T]
     srcA_spec = sample["srcA_spec"].unsqueeze(0).to(device)      # [1,F,T]
     srcB_spec = sample["srcB_spec"].unsqueeze(0).to(device)      # [1,F,T]
@@ -224,7 +224,7 @@ def main() -> None:
     srcB_time_true = sample["srcB_time"].to(device)              # [N]
 
     with torch.no_grad():
-        pred_mask = model(mix_mag)  # [1,2,F,T]
+        pred_mask = model(mix_feat)  # [1,2,F,T]
         pred_srcA_spec = pred_mask[:, 0] * mix_spec
         pred_srcB_spec = pred_mask[:, 1] * mix_spec
         pred_srcA_time = istft_reconstruct(pred_srcA_spec, cfg=cfg, length=cfg.data.window_len)[0]
@@ -238,16 +238,19 @@ def main() -> None:
         """spec_ft: 复数谱 [F,T] -> 对数幅度 [F,T] numpy。"""
         return spec_to_logmag(spec_ft.detach().cpu(), eps=eps)[0].numpy()
 
-    mix_mag_np = _log_mag_ft(mix_spec[0])
+    mix_logmag_np = _log_mag_ft(mix_spec[0])
     srcA_mag_np = _log_mag_ft(srcA_spec[0])
     srcB_mag_np = _log_mag_ft(srcB_spec[0])
     predA_mag_np = _log_mag_ft(pred_srcA_spec[0])
     predB_mag_np = _log_mag_ft(pred_srcB_spec[0])
 
-    ref_mix_from_tensor = mix_mag[0, 0].detach().cpu().numpy()
-    if not np.allclose(mix_mag_np, ref_mix_from_tensor, rtol=1e-5, atol=1e-3):
+    # 默认输入主图展示 mix_feat 的第 0 通道（logmag）。
+    # 通道定义：mix_feat[0]=logmag, mix_feat[1]=sin_phi, mix_feat[2]=cos_phi
+    ref_mix_from_tensor = mix_feat[0, 0].detach().cpu().numpy()
+    if not np.allclose(mix_logmag_np, ref_mix_from_tensor, rtol=1e-5, atol=1e-3):
         raise RuntimeError(
-            "mix log-mag from mix_spec disagrees with sample['mix_mag']; check eps / STFT pipeline."
+            "mix log-mag from mix_spec disagrees with sample['mix_feat'][0] (logmag); "
+            "check eps / STFT pipeline."
         )
 
     curves = _extract_loss_curves(history_path)
@@ -267,7 +270,7 @@ def main() -> None:
         fig.colorbar(im, ax=axis, fraction=0.046, pad=0.04)
 
     spec_axes = [fig.add_subplot(gs[0, i]) for i in range(5)]
-    _plot_spec(spec_axes[0], mix_mag_np, "Mix log_magnitude")
+    _plot_spec(spec_axes[0], mix_logmag_np, "Mix log_magnitude")
     _plot_spec(spec_axes[1], srcA_mag_np, "SrcA real log_magnitude")
     _plot_spec(spec_axes[2], predA_mag_np, "SrcA pred log_magnitude")
     _plot_spec(spec_axes[3], srcB_mag_np, "SrcB real log_magnitude")

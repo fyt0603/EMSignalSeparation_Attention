@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 
 
 REQUIRED_BATCH_KEYS = (
-    "mix_mag",
+    "mix_feat",
     "mix_spec",
     "srcA_spec",
     "srcB_spec",
@@ -71,7 +71,7 @@ def _require_keys(batch: Mapping[str, Any]) -> None:
 
 def _validate_shapes(batch: Mapping[str, Any]) -> None:
     """检查当前数据格式是否满足训练链路约定。"""
-    mix_mag = batch["mix_mag"]
+    mix_feat = batch["mix_feat"]
     mix_spec = batch["mix_spec"]
     srcA_spec = batch["srcA_spec"]
     srcB_spec = batch["srcB_spec"]
@@ -79,8 +79,8 @@ def _validate_shapes(batch: Mapping[str, Any]) -> None:
     srcA_time = batch["srcA_time"]
     srcB_time = batch["srcB_time"]
 
-    if not isinstance(mix_mag, torch.Tensor) or mix_mag.ndim != 4 or mix_mag.shape[1] != 1:
-        raise ValueError(f"mix_mag must be [B,1,F,T], got {getattr(mix_mag, 'shape', None)}")
+    if not isinstance(mix_feat, torch.Tensor) or mix_feat.ndim != 4 or mix_feat.shape[1] != 3:
+        raise ValueError(f"mix_feat must be [B,3,F,T], got {getattr(mix_feat, 'shape', None)}")
     if not isinstance(mask_target, torch.Tensor) or mask_target.ndim != 4 or mask_target.shape[1] != 2:
         raise ValueError(
             f"mask_target must be [B,2,F,T], got {getattr(mask_target, 'shape', None)}"
@@ -99,8 +99,8 @@ def _validate_shapes(batch: Mapping[str, Any]) -> None:
             f"{mix_spec.shape}, {srcA_spec.shape}, {srcB_spec.shape}"
         )
     # 检查batch_size维度是否一致
-    if mix_mag.shape[0] != mix_spec.shape[0]:
-        raise ValueError("Batch size mismatch between mix_mag and mix_spec.")
+    if mix_feat.shape[0] != mix_spec.shape[0]:
+        raise ValueError("Batch size mismatch between mix_feat and mix_spec.")
     if mask_target.shape[0] != mix_spec.shape[0]:
         raise ValueError("Batch size mismatch between mask_target and mix_spec.")
     if srcA_time.shape[0] != mix_spec.shape[0] or srcB_time.shape[0] != mix_spec.shape[0]:
@@ -124,7 +124,7 @@ def train_one_epoch(
         batch = _move_batch_to_device(batch, device)
         _validate_shapes(batch)
 
-        pred_mask = model(batch["mix_mag"])  # [B, 2, F, T]
+        pred_mask = model(batch["mix_feat"])  # [B, 2, F, T]
         loss_dict = criterion(
             pred_mask=pred_mask,
             target_mask=batch["mask_target"],
@@ -162,7 +162,7 @@ def validate_one_epoch(
             batch = _move_batch_to_device(batch, device)
             _validate_shapes(batch)
 
-            pred_mask = model(batch["mix_mag"])  # [B, 2, F, T]
+            pred_mask = model(batch["mix_feat"])  # [B, 2, F, T]
             loss_dict = criterion(
                 pred_mask=pred_mask,
                 target_mask=batch["mask_target"],

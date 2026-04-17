@@ -1,7 +1,7 @@
 """Patch Embedding 模块。
 
 职责：
-- 将输入时频图 `[B, 1, F, T]` 切分为 patch 并映射为 token。
+- 将输入时频图 `[B, C, F, T]` 切分为 patch 并映射为 token。
 - 自动对右侧和下侧做零填充，使 `F/T` 可被 patch size 整除。
 - 提供可恢复空间布局所需的元信息（grid/orig/pad）。
 """
@@ -19,15 +19,15 @@ class PatchEmbed2D(nn.Module):
     """时频二维 patch 嵌入。
 
     维度流转：
-    - 输入：`x` -> `[B, 1, F, T]`
-    - padding 后：`[B, 1, F_pad, T_pad]`
+    - 输入：`x` -> `[B, C, F, T]`（其中 `C = in_channels`）
+    - padding 后：`[B, C, F_pad, T_pad]`
     - Conv2d 投影：`[B, D, grid_f, grid_t]`
     - 展平 token：`[B, N, D]`，其中 `N = grid_f * grid_t`
     """
 
     def __init__(
         self,
-        in_channels: int = 1,
+        in_channels: int = 3,
         embed_dim: int = 256,
         patch_size: int = 16,
         patch_freq: Optional[int] = None,
@@ -68,7 +68,7 @@ class PatchEmbed2D(nn.Module):
         """将时频图转为 patch token。
 
         Args:
-            x: 输入幅度谱，shape `[B, 1, F, T]`。
+            x: 输入特征图，shape `[B, C, F, T]`（`C = in_channels`）。
             return_meta: 为 True 时额外返回元信息字典。
 
         Returns:
@@ -79,7 +79,7 @@ class PatchEmbed2D(nn.Module):
                 - `pad_f`, `pad_t`
         """
         if x.ndim != 4:
-            raise ValueError(f"Expected input [B,1,F,T], got {tuple(x.shape)}")
+            raise ValueError(f"Expected input [B,C,F,T], got {tuple(x.shape)}")
         if x.shape[1] != self.in_channels:
             raise ValueError(
                 f"Expected channel={self.in_channels}, got input channel={x.shape[1]}"

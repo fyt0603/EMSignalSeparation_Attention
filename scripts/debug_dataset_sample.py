@@ -61,7 +61,7 @@ def main() -> None:
     from data.dataset import DroneSeparationDataset
 
     cfg = get_default_config()
-    split = "test"
+    split = "train"
     index_path = cfg.paths.outputs_dir / "indexes" / f"{split}_index.json"
 
     if len(cfg.file_split.drone_codes) < 2:
@@ -97,7 +97,7 @@ def main() -> None:
 
     print("\n--- Key Tensor Summary ---")
     for key in [
-        "mix_mag",
+        "mix_feat",
         "mix_spec",
         "srcA_spec",
         "srcB_spec",
@@ -127,7 +127,7 @@ if __name__ == "__main__":
 
 # --- Sample Fields ---
 # [mask_target]      type=Tensor         shape=(2, 512, 255)    dtype=torch.float32    is_complex=False
-# [mix_mag]          type=Tensor         shape=(1, 512, 255)    dtype=torch.float32    is_complex=False
+# [mix_feat]         type=Tensor         shape=(3, 512, 255)    dtype=torch.float32    is_complex=False
 # [mix_spec]         type=Tensor         shape=(512, 255)       dtype=torch.complex64  is_complex=True
 # [sir_db]           type=Tensor         shape=()               dtype=torch.float32    is_complex=False
 # [source_a_code]    type=str            value=T0010
@@ -138,7 +138,7 @@ if __name__ == "__main__":
 # [srcB_time]        type=Tensor         shape=(65536,)         dtype=torch.complex64  is_complex=True
 
 # --- Key Tensor Summary ---
-# mix_mag      shape=(1, 512, 255), dtype=torch.float32
+# mix_feat     shape=(3, 512, 255), dtype=torch.float32
 # mix_spec     shape=(512, 255), dtype=torch.complex64
 # srcA_spec    shape=(512, 255), dtype=torch.complex64
 # srcB_spec    shape=(512, 255), dtype=torch.complex64
@@ -157,7 +157,7 @@ if __name__ == "__main__":
 
 # --- Sample Fields ---
 # [mask_target]      type=Tensor         shape=(2, 512, 255)    dtype=torch.float32    is_complex=False
-# [mix_mag]          type=Tensor         shape=(1, 512, 255)    dtype=torch.float32    is_complex=False
+# [mix_feat]         type=Tensor         shape=(3, 512, 255)    dtype=torch.float32    is_complex=False
 # [mix_spec]         type=Tensor         shape=(512, 255)       dtype=torch.complex64  is_complex=True
 # [sir_db]           type=Tensor         shape=()               dtype=torch.float32    is_complex=False
 # [source_a_code]    type=str            value=T0010
@@ -168,7 +168,7 @@ if __name__ == "__main__":
 # [srcB_time]        type=Tensor         shape=(65536,)         dtype=torch.complex64  is_complex=True
 
 # --- Key Tensor Summary ---
-# mix_mag      shape=(1, 512, 255), dtype=torch.float32
+# mix_feat     shape=(3, 512, 255), dtype=torch.float32
 # mix_spec     shape=(512, 255), dtype=torch.complex64
 # srcA_spec    shape=(512, 255), dtype=torch.complex64
 # srcB_spec    shape=(512, 255), dtype=torch.complex64
@@ -187,7 +187,7 @@ if __name__ == "__main__":
 
 # --- Sample Fields ---
 # [mask_target]      type=Tensor         shape=(2, 512, 255)    dtype=torch.float32    is_complex=False
-# [mix_mag]          type=Tensor         shape=(1, 512, 255)    dtype=torch.float32    is_complex=False
+# [mix_feat]         type=Tensor         shape=(3, 512, 255)    dtype=torch.float32    is_complex=False
 # [mix_spec]         type=Tensor         shape=(512, 255)       dtype=torch.complex64  is_complex=True
 # [sir_db]           type=Tensor         shape=()               dtype=torch.float32    is_complex=False
 # [source_a_code]    type=str            value=T0010
@@ -198,7 +198,7 @@ if __name__ == "__main__":
 # [srcB_time]        type=Tensor         shape=(65536,)         dtype=torch.complex64  is_complex=True
 
 # --- Key Tensor Summary ---
-# mix_mag      shape=(1, 512, 255), dtype=torch.float32
+# mix_feat     shape=(3, 512, 255), dtype=torch.float32
 # mix_spec     shape=(512, 255), dtype=torch.complex64
 # srcA_spec    shape=(512, 255), dtype=torch.complex64
 # srcB_spec    shape=(512, 255), dtype=torch.complex64
