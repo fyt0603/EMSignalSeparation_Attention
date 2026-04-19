@@ -84,6 +84,18 @@ def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Mo
             bidirectional=cfg.lstm.bidirectional,
             dropout=cfg.lstm.dropout,
         )
+    elif model_name == "cnn":
+        from models.cnn import CNNSeparator
+
+        model = CNNSeparator(
+            in_channels=3,
+            out_masks=2,
+            embed_dim=cfg.model.d_model,
+            depth=2,
+            dropout=cfg.model.dropout,
+            patch_size=cfg.model.patch_size,
+            use_cnn_skip=True,
+        )
     else:
         raise ValueError(f"Unsupported model_name: {model_name}")
     return model.to(device)
@@ -168,7 +180,7 @@ def parse_args() -> argparse.Namespace:
         "--model_name",
         type=str,
         default="transformer",
-        choices=["resnet18d", "transformer", "lstm"],
+        choices=["resnet18d", "transformer", "lstm", "cnn"],
         help="Model family",
     )
     return parser.parse_args()
