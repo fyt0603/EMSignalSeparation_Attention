@@ -1,4 +1,4 @@
-"""ResNet18D 分离模型。
+"""ResNet18 分离模型。
 
 输入/输出约定：
 - 输入：`[B, 1, F, T]`（混合信号对数幅度谱）
@@ -7,14 +7,14 @@
 
 from __future__ import annotations
 
-import timm
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torchvision.models import resnet18
 
 
-class ResNet18DSeparator(nn.Module):
-    """基于 timm resnet18d backbone 的双源 mask 预测器。"""
+class ResNet18Separator(nn.Module):
+    """基于标准 ResNet18 backbone 的双源 mask 预测器。"""
 
     def __init__(self, in_channels: int = 1, out_masks: int = 2) -> None:
         super().__init__()
@@ -26,16 +26,29 @@ class ResNet18DSeparator(nn.Module):
         self.in_channels = in_channels
         self.out_masks = out_masks
 
-        # 使用 feature extraction 方式，不使用分类头。
-        self.resnet18d = timm.create_model(
-            "resnet18d",
-            pretrained=False,
-            in_chans=in_channels,
-            features_only=True,
-            out_indices=(4,),
+        # 使用标准 ResNet18，并替换首层为单通道输入。
+        # 仅保留卷积特征提取部分，不使用分类头。
+        backbone = resnet18(weights=None)
+        backbone.conv1 = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=64,
+            kernel_size=7,
+            stride=2,
+            padding=3,
+            bias=False,
+        )
+        self.backbone = nn.Sequential(
+            backbone.conv1,
+            backbone.bn1,
+            backbone.relu,
+            backbone.maxpool,
+            backbone.layer1,
+            backbone.layer2,
+            backbone.layer3,
+            backbone.layer4,
         )
 
-        # resnet18d 最后一层特征通道为 512。
+        # ResNet18 最后一层特征通道为 512。
         self.head = nn.Conv2d(in_channels=512, out_channels=out_masks, kernel_size=1, padding=0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -50,8 +63,8 @@ class ResNet18DSeparator(nn.Module):
 
         orig_f, orig_t = int(x.shape[-2]), int(x.shape[-1])
 
-        # resnet18d feature map，shape 约为 [B, 512, F/32, T/32]
-        feat = self.resnet18d(x)[0]
+        # ResNet18 feature map，shape 约为 [B, 512, F/32, T/32]
+        feat = self.backbone(x)
         logits_low = self.head(feat)  # [B, 2, f_low, t_low]
 
         # 上采样回输入分辨率，得到 [B, 2, F, T]

@@ -40,10 +40,10 @@ def _resolve_model_name(args: argparse.Namespace) -> str:
 
 
 def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Module:
-    if model_name == "resnet18d":
-        from models.resnet18d import ResNet18DSeparator
+    if model_name == "resnet18":
+        from models.resnet18 import ResNet18Separator
 
-        model = ResNet18DSeparator(in_channels=1, out_masks=2)
+        model = ResNet18Separator(in_channels=1, out_masks=2)
     elif model_name == "transformer":
         from models.transformer import TransformerSeparator
 
@@ -69,6 +69,14 @@ def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Mo
             bidirectional=cfg.lstm.bidirectional,
             dropout=cfg.lstm.dropout,
         )
+    elif model_name == "unet":
+        from models.unet import UNetSeparator
+
+        model = UNetSeparator(
+            in_channels=1,
+            out_masks=2,
+            base_channels=16,
+        )
     else:
         raise ValueError(f"Unsupported model_name: {model_name}")
     return model.to(device)
@@ -92,7 +100,7 @@ def parse_args() -> argparse.Namespace:
         "--model_name",
         type=str,
         default=None,
-        choices=["resnet18d", "transformer", "lstm"],
+        choices=["resnet18", "transformer", "lstm", "unet"],
         help="Override model name",
     )
     parser.add_argument(

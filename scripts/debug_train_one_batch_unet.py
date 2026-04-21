@@ -1,12 +1,12 @@
-"""单 batch 训练链路调试脚本。
+"""U-Net 单 batch 训练链路调试脚本。
 
 目的：
-- 验证 Dataset/DataLoader、模型前向、损失计算、反向传播、优化器更新是否打通。
-- 使用同一个 batch 重复训练若干步，观察 loss 是否下降。
+- 验证 Dataset/DataLoader、U-Net 前向、SeparationLoss、反向传播与参数更新是否打通。
+- 固定同一个 batch 重复训练若干步，观察 loss 是否下降。
 
 运行方式（项目根目录）：
-- python -m scripts.debug_train_one_batch
-- python scripts/debug_train_one_batch.py
+- python -m scripts.debug_train_one_batch_unet
+- python scripts/debug_train_one_batch_unet.py
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from torch.utils.data import DataLoader
 
 
 def _ensure_project_root_in_syspath() -> Path:
-    """确保以脚本方式运行时也能正确导入项目模块。"""
     project_root = Path(__file__).resolve().parents[1]
     root_str = str(project_root)
     if root_str not in sys.path:
@@ -38,8 +37,8 @@ def _print_batch_info(batch: Dict[str, Any]) -> None:
                 f"dtype={str(value.dtype):<16} is_complex={torch.is_complex(value)}"
             )
         elif isinstance(value, (list, tuple)):
-            example = value[0] if len(value) > 0 else None
-            print(f"{key:<12} type={type(value).__name__:<10} len={len(value)} sample={example}")
+            sample = value[0] if len(value) > 0 else None
+            print(f"{key:<12} type={type(value).__name__:<10} len={len(value)} sample={sample}")
         else:
             print(f"{key:<12} type={type(value).__name__:<10} value={value}")
 
@@ -47,10 +46,7 @@ def _print_batch_info(batch: Dict[str, Any]) -> None:
 def _to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for k, v in batch.items():
-        if isinstance(v, torch.Tensor):
-            out[k] = v.to(device)
-        else:
-            out[k] = v
+        out[k] = v.to(device) if isinstance(v, torch.Tensor) else v
     return out
 
 
@@ -60,11 +56,11 @@ def main() -> None:
     from configs.config import get_default_config
     from data.dataset import DroneSeparationDataset
     from losses.separation_loss import SeparationLoss
-    from models.resnet18d import ResNet18DSeparator
+    from models.unet import UNetSeparator
 
     cfg = get_default_config()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("=== Debug One Batch Training ===")
+    print("=== Debug One Batch U-Net Training ===")
     print(f"project_root: {project_root}")
     print(f"device      : {device}")
 
@@ -72,7 +68,7 @@ def main() -> None:
         raise ValueError("Need at least two drone codes in cfg.file_split.drone_codes.")
 
     split = "train"
-    sir_db = 0.0
+    sir_db = cfg.train.sir_db
     source_a_code = cfg.file_split.drone_codes[0]
     source_b_code = cfg.file_split.drone_codes[1]
     index_path = cfg.paths.outputs_dir / "indexes" / "train_index.json"
@@ -100,7 +96,11 @@ def main() -> None:
     _print_batch_info(batch)
     batch = _to_device(batch, device)
 
-    model = ResNet18DSeparator(in_channels=1, out_masks=2).to(device)
+    model = UNetSeparator(
+        in_channels=1,
+        out_masks=2,
+        base_channels=16,
+    ).to(device)
     criterion = SeparationLoss(
         mag_loss_weight=cfg.loss.mag_loss_weight,
         mask_loss_weight=cfg.loss.mask_loss_weight,
@@ -112,7 +112,7 @@ def main() -> None:
         weight_decay=cfg.train.weight_decay,
     )
 
-    steps = 1000
+    steps = 200
     print_every = 10
     initial_loss: float = -1.0
     final_loss: float = -1.0
