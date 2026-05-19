@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -50,19 +51,39 @@ def _to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
     return out
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Debug one-batch transformer training")
+    parser.add_argument(
+        "--mask_type",
+        type=str,
+        default="magnitude",
+        choices=["magnitude", "complex"],
+        help="Mask mode for debug run",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     project_root = _ensure_project_root_in_syspath()
 
     from configs.config import get_default_config
     from data.dataset import DroneSeparationDataset
+    from losses.complex_mask_separation_loss import ComplexMaskSeparationLoss
     from losses.separation_loss import SeparationLoss
     from models.transformer import TransformerSeparator
 
+    args = parse_args()
+    mask_type = args.mask_type
     cfg = get_default_config()
+    cfg.model.mask_type = mask_type
+    cfg.model.mask_bound = 5.0
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    expected_channels = 4 if mask_type == "complex" else 2
     print("=== Debug One Batch Transformer Training ===")
     print(f"project_root: {project_root}")
     print(f"device      : {device}")
+    print(f"mask_type   : {mask_type}")
+    print(f"exp_channels: {expected_channels}")
 
     if len(cfg.file_split.drone_codes) < 2:
         raise ValueError("Need at least two drone codes in cfg.file_split.drone_codes.")
@@ -94,11 +115,19 @@ def main() -> None:
 
     batch = next(iter(loader))
     _print_batch_info(batch)
+    if not isinstance(batch["mask_target"], torch.Tensor) or batch["mask_target"].shape[1] != expected_channels:
+        raise ValueError(
+            f"mask_target channel mismatch: expected {expected_channels}, "
+            f"got {getattr(batch['mask_target'], 'shape', None)}"
+        )
     batch = _to_device(batch, device)
 
+    out_masks = 4 if mask_type == "complex" else 2
     model = TransformerSeparator(
         in_channels=3,
-        out_masks=2,
+        out_masks=out_masks,
+        mask_type=cfg.model.mask_type,
+        mask_bound=cfg.model.mask_bound,
         embed_dim=cfg.model.d_model,
         depth=cfg.model.num_layers,
         num_heads=cfg.model.n_heads,
@@ -106,18 +135,25 @@ def main() -> None:
         dropout=cfg.model.dropout,
         patch_size=cfg.model.patch_size,
     ).to(device)
-    criterion = SeparationLoss(
-        mag_loss_weight=cfg.loss.mag_loss_weight,
-        mask_loss_weight=cfg.loss.mask_loss_weight,
-        corr_loss_weight=cfg.loss.corr_loss_weight,
-    ).to(device)
+    if mask_type == "complex":
+        criterion = ComplexMaskSeparationLoss(
+            mag_loss_weight=cfg.loss.mag_loss_weight,
+            mask_loss_weight=cfg.loss.mask_loss_weight,
+            corr_loss_weight=cfg.loss.corr_loss_weight,
+        ).to(device)
+    else:
+        criterion = SeparationLoss(
+            mag_loss_weight=cfg.loss.mag_loss_weight,
+            mask_loss_weight=cfg.loss.mask_loss_weight,
+            corr_loss_weight=cfg.loss.corr_loss_weight,
+        ).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=cfg.train.learning_rate,
         weight_decay=cfg.train.weight_decay,
     )
 
-    steps = 200
+    steps = 1000
     print_every = 10
     initial_loss: float = -1.0
     final_loss: float = -1.0
@@ -126,7 +162,11 @@ def main() -> None:
     for step in range(1, steps + 1):
         optimizer.zero_grad(set_to_none=True)
 
-        pred_mask = model(batch["mix_feat"])  # mix_feat: [B, 3, F, T] -> pred_mask: [B, 2, F, T]
+        pred_mask = model(batch["mix_feat"])
+        if pred_mask.shape[1] != expected_channels:
+            raise ValueError(
+                f"pred_mask channel mismatch: expected {expected_channels}, got {tuple(pred_mask.shape)}"
+            )
         loss_dict = criterion(
             pred_mask=pred_mask,
             target_mask=batch["mask_target"],
@@ -163,3 +203,5 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
+# python -m scripts.debug_train_one_batch_transformer --mask_type magnitude
+# python -m scripts.debug_train_one_batch_transformer --mask_type complex

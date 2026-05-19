@@ -9,9 +9,11 @@ TransformerSeparator 维度流转：
 2) PatchEmbed：`[B, N, D]`（内部自动 padding）
 3) + 位置编码，TransformerEncoder：`[B, N, D]`
 4) token -> grid：`[B, D, grid_f, grid_t]`
-5) 解码：`[B, 2, F_pad, T_pad]`
-6) 按原始尺寸裁剪：`[B, 2, F, T]`
-7) 源维 softmax：`[B, 2, F, T]`
+5) 解码：`[B, out_masks, F_pad, T_pad]`
+6) 按原始尺寸裁剪：`[B, out_masks, F, T]`
+7) 输出：
+   - magnitude: 源维 softmax -> `[B, 2, F, T]`
+   - complex: `mask_bound * tanh` -> `[B, 4, F, T]`
 """
 
 from __future__ import annotations
@@ -87,6 +89,8 @@ class TransformerSeparator(nn.Module):
         self,
         in_channels: int = 3,
         out_masks: int = 2,
+        mask_type: str = "magnitude",
+        mask_bound: float = 5.0,
         embed_dim: int = 256,
         depth: int = 4,
         num_heads: int = 8,
@@ -98,15 +102,25 @@ class TransformerSeparator(nn.Module):
         use_cnn_skip: bool = True,
     ) -> None:
         super().__init__()
-        if out_masks != 2:
-            raise ValueError(f"Current project expects out_masks=2, got {out_masks}")
+        if mask_type not in ("magnitude", "complex"):
+            raise ValueError(
+                f"mask_type must be 'magnitude' or 'complex', got {mask_type}"
+            )
+        if mask_type == "magnitude" and out_masks != 2:
+            raise ValueError(f"magnitude mode expects out_masks=2, got {out_masks}")
+        if mask_type == "complex" and out_masks != 4:
+            raise ValueError(f"complex mode expects out_masks=4, got {out_masks}")
         if decoder_type not in ("deconv", "unet"):
             raise ValueError(f"decoder_type must be 'deconv' or 'unet', got {decoder_type}")
         if in_channels <= 0:
             raise ValueError(f"in_channels must be > 0, got {in_channels}")
+        if mask_bound <= 0:
+            raise ValueError(f"mask_bound must be > 0, got {mask_bound}")
 
         self.in_channels = in_channels
         self.out_masks = out_masks
+        self.mask_type = mask_type
+        self.mask_bound = float(mask_bound)
         self.embed_dim = embed_dim
         self.max_tokens = max_tokens
         self.decoder_type = decoder_type
@@ -163,7 +177,9 @@ class TransformerSeparator(nn.Module):
             mix_feat: 输入混合信号特征图，shape `[B, C, F, T]`，`C = in_channels`。
 
         Returns:
-            torch.Tensor: 预测 mask，shape `[B, 2, F, T]`。
+            torch.Tensor: 预测 mask。
+                - magnitude: `[B, 2, F, T]`
+                - complex: `[B, 4, F, T]`，通道顺序为 `M_A_r, M_A_i, M_B_r, M_B_i`
         """
         if mix_feat.ndim != 4:
             raise ValueError(f"Expected input [B,C,F,T], got {tuple(mix_feat.shape)}")
@@ -182,7 +198,7 @@ class TransformerSeparator(nn.Module):
 
         # 4) 解码到 padded mask
         if self.decoder_type == "deconv":
-            mask_logits_pad = self.decode_head(grid_feat)  # [B, 2, F_pad, T_pad]
+            mask_logits_pad = self.decode_head(grid_feat)  # [B, out_masks, F_pad, T_pad]
         else:
             # 4.1) bottleneck 投影到 256 通道
             bottleneck = self.bottleneck_proj(grid_feat)  # [B, 256, grid_f, grid_t]
@@ -201,13 +217,16 @@ class TransformerSeparator(nn.Module):
                 skips = self.cnn_skip(x_pad)  # (s1, s2, s3, s4)
 
             # 4.3) U-Net 解码
-            mask_logits_pad = self.unet_decoder(bottleneck, skips=skips)  # [B, 2, F_pad, T_pad]
+            mask_logits_pad = self.unet_decoder(bottleneck, skips=skips)  # [B, out_masks, F_pad, T_pad]
 
         # 5) 裁剪回原始尺寸
         orig_f = int(meta["orig_f"])
         orig_t = int(meta["orig_t"])
-        mask_logits = mask_logits_pad[:, :, :orig_f, :orig_t]  # [B, 2, F, T]
+        raw_output = mask_logits_pad[:, :, :orig_f, :orig_t]  # [B, out_masks, F, T]
 
-        # 6) 源维度 softmax，得到两个 mask 概率
-        masks = torch.softmax(mask_logits, dim=1)
+        # 6) 按 mask_type 输出
+        if self.mask_type == "magnitude":
+            masks = torch.softmax(raw_output, dim=1)  # [B, 2, F, T]
+        else:
+            masks = self.mask_bound * torch.tanh(raw_output)  # [B, 4, F, T]
         return masks

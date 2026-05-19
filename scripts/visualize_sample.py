@@ -1,8 +1,9 @@
 """样本可视化脚本。
 
-- 模型：`TransformerSeparator`（`--model_name` 默认 transformer）
-- checkpoint：`outputs/checkpoints/best_transformer.pt`（可用 `--ckpt` 覆盖）
-- 训练日志：`outputs/logs/train_history_transformer.json`（可用 `--history_json` 覆盖）
+- 模型：`TransformerSeparator`（`--model_name` 默认 transformer）等，由配置选择。
+- mask 模式：默认从 `config.py` 的 `cfg.model.mask_type` 读取；可用 `--mask_type` 覆盖。
+- checkpoint：默认 `outputs/checkpoints/best_{model_name}_{mask_type}.pt`（可用 `--ckpt` 覆盖）
+- 训练日志：默认 `outputs/logs/train_history_{model_name}_{mask_type}.json`（可用 `--history_json` 覆盖）
 
 可视化内容：
 1) 五联时频谱图（均为对数幅度谱）
@@ -41,7 +42,11 @@ def _resolve_ckpt(cfg: Any, ckpt_arg: str, model_name: str) -> Path:
     if ckpt_arg:
         ckpt_path = Path(ckpt_arg)
     else:
-        ckpt_path = cfg.paths.outputs_dir / "checkpoints" / f"best_{model_name}.pt"
+        ckpt_path = (
+            cfg.paths.outputs_dir
+            / "checkpoints"
+            / f"best_{model_name}_{cfg.model.mask_type}.pt"
+        )
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
     return ckpt_path
@@ -50,39 +55,33 @@ def _resolve_ckpt(cfg: Any, ckpt_arg: str, model_name: str) -> Path:
 def _resolve_history(cfg: Any, history_arg: str, model_name: str) -> Path:
     if history_arg:
         return Path(history_arg)
-    return cfg.paths.outputs_dir / "logs" / f"train_history_{model_name}.json"
+    return (
+        cfg.paths.outputs_dir
+        / "logs"
+        / f"train_history_{model_name}_{cfg.model.mask_type}.json"
+    )
 
 
 def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Module:
     """模型创建与切换入口"""
-    if model_name == "resnet18d":
-        from models.resnet18d import ResNet18DSeparator
+    if model_name != "transformer" and cfg.model.mask_type == "complex":
+        raise ValueError("complex mask is currently only supported for transformer model.")
 
-        model = ResNet18DSeparator(in_channels=1, out_masks=2)
-    elif model_name == "transformer":
+    if model_name == "transformer":
         from models.transformer import TransformerSeparator
 
+        out_masks = 4 if cfg.model.mask_type == "complex" else 2
         model = TransformerSeparator(
             in_channels=3,
-            out_masks=2,
+            out_masks=out_masks,
+            mask_type=cfg.model.mask_type,
+            mask_bound=cfg.model.mask_bound,
             embed_dim=cfg.model.d_model,
             depth=cfg.model.num_layers,
             num_heads=cfg.model.n_heads,
             ff_dim=cfg.model.ff_dim,
             dropout=cfg.model.dropout,
             patch_size=cfg.model.patch_size,
-        )
-    elif model_name == "lstm":
-        from models.lstm import LSTMSeparator
-
-        model = LSTMSeparator(
-            in_channels=1,
-            out_masks=2,
-            input_freq_bins=cfg.stft.n_fft,
-            hidden_size=cfg.lstm.hidden_size,
-            num_layers=cfg.lstm.num_layers,
-            bidirectional=cfg.lstm.bidirectional,
-            dropout=cfg.lstm.dropout,
         )
     elif model_name == "cnn":
         from models.cnn import CNNSeparator
@@ -180,8 +179,21 @@ def parse_args() -> argparse.Namespace:
         "--model_name",
         type=str,
         default="transformer",
-        choices=["resnet18d", "transformer", "lstm", "cnn"],
+        choices=["transformer", "cnn"],
         help="Model family",
+    )
+    parser.add_argument(
+        "--mask_type",
+        type=str,
+        default=None,
+        choices=["magnitude", "complex"],
+        help="Mask mode override (default: use config)",
+    )
+    parser.add_argument(
+        "--mask_bound",
+        type=float,
+        default=None,
+        help="Complex mask bound override (default: use config)",
     )
     return parser.parse_args()
 
@@ -190,12 +202,17 @@ def main() -> None:
     _ensure_project_root_in_syspath()
 
     from configs.config import get_default_config
+    from data.complex_mask_utils import apply_complex_mask
     from data.dataset import DroneSeparationDataset
     from data.stft_utils import istft_reconstruct, spec_to_logmag
     from engine.metrics import complex_corr
 
     args = parse_args()
     cfg = get_default_config()
+    if args.mask_type is not None:
+        cfg.model.mask_type = args.mask_type
+    if args.mask_bound is not None:
+        cfg.model.mask_bound = float(args.mask_bound)
     device = _build_device(args.device)
     ckpt_path = _resolve_ckpt(cfg, args.ckpt, args.model_name)
     history_path = _resolve_history(cfg, args.history_json, args.model_name)
@@ -236,9 +253,19 @@ def main() -> None:
     srcB_time_true = sample["srcB_time"].to(device)              # [N]
 
     with torch.no_grad():
-        pred_mask = model(mix_feat)  # [1,2,F,T]
-        pred_srcA_spec = pred_mask[:, 0] * mix_spec
-        pred_srcB_spec = pred_mask[:, 1] * mix_spec
+        pred_mask = model(mix_feat)
+        mask_type = getattr(cfg.model, "mask_type", "magnitude")
+        if mask_type == "complex":
+            if pred_mask.shape[1] != 4:
+                raise ValueError(f"complex mode expects pred_mask [1,4,F,T], got {tuple(pred_mask.shape)}")
+            pred_srcA_spec, pred_srcB_spec = apply_complex_mask(pred_mask, mix_spec)
+        elif mask_type == "magnitude":
+            if pred_mask.shape[1] != 2:
+                raise ValueError(f"magnitude mode expects pred_mask [1,2,F,T], got {tuple(pred_mask.shape)}")
+            pred_srcA_spec = pred_mask[:, 0] * mix_spec
+            pred_srcB_spec = pred_mask[:, 1] * mix_spec
+        else:
+            raise ValueError(f"Unsupported mask_type: {mask_type}")
         pred_srcA_time = istft_reconstruct(pred_srcA_spec, cfg=cfg, length=cfg.data.window_len)[0]
         pred_srcB_time = istft_reconstruct(pred_srcB_spec, cfg=cfg, length=cfg.data.window_len)[0]
 
@@ -290,6 +317,7 @@ def main() -> None:
 
     fig.suptitle(
         f"split={args.split} | sample_idx={args.sample_idx} | "
+        f"mask_type={mask_type} | "
         f"A={source_a_code} B={source_b_code} | sir_db={sir_db} | "
         f"corr_a={corr_a:.4f} corr_b={corr_b:.4f}",
         fontsize=13,
@@ -299,15 +327,19 @@ def main() -> None:
     out_dir = cfg.paths.outputs_dir / "figures"
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = out_dir / f"viz_spec5_{args.model_name}_{args.split}_idx{args.sample_idx}_{ts}.png"
+    out_path = (
+        out_dir
+        / f"viz_spec5_{args.model_name}_{mask_type}_{args.split}_idx{args.sample_idx}_{ts}.png"
+    )
     fig.savefig(out_path, dpi=180)
     plt.close(fig)
 
-    both_curve_path = out_dir / f"loss_train_val_{args.model_name}_{ts}.png"
+    both_curve_path = out_dir / f"loss_train_val_{args.model_name}_{mask_type}_{ts}.png"
     _plot_and_save_combined_loss_curve(both_curve_path, train_curve, val_curve)
 
     print("=== Visualize Done ===")
     print(f"model        : {args.model_name}")
+    print(f"mask_type    : {mask_type}")
     print(f"device       : {device}")
     print(f"checkpoint   : {ckpt_path}")
     print(f"history_json : {history_path}")

@@ -91,23 +91,28 @@ class STFTConfig:
 class ModelConfig:
     """Transformer 分离模型配置。"""
 
-    # 输入为 [B, 1, F, T]，输出 mask 为 [B, 2, F, T]
+    # 输入为 [B, 1, F, T]，输出 mask 为 [B, 2/4, F, T]
     patch_size: int = 16
     d_model: int = 256
     n_heads: int = 8
     num_layers: int = 4
     ff_dim: int = 1024
     dropout: float = 0.1
+    # mask 类型：
+    # - "magnitude": 保持现有幅度 mask baseline 行为
+    # - "complex": 使用复数 mask 分支（如 pred_mask = mask_bound * tanh(raw_output)）
+    mask_type: str = "magnitude"
+    # complex mask 输出限幅系数：pred_mask = mask_bound * tanh(raw_output)
+    mask_bound: float = 5.0
 
-
-@dataclass
-class LSTMConfig:
-    """LSTM 分离模型配置。"""
-
-    hidden_size: int = 256
-    num_layers: int = 2
-    bidirectional: bool = True
-    dropout: float = 0.1
+    def __post_init__(self) -> None:
+        allowed_mask_types = {"magnitude", "complex"}
+        if self.mask_type not in allowed_mask_types:
+            raise ValueError(
+                f"mask_type must be one of {sorted(allowed_mask_types)}, got '{self.mask_type}'"
+            )
+        if self.mask_bound <= 0:
+            raise ValueError(f"mask_bound must be > 0, got {self.mask_bound}")
 
 
 @dataclass
@@ -146,7 +151,6 @@ class ExperimentConfig:
     data: DataConfig = field(default_factory=DataConfig)
     stft: STFTConfig = field(default_factory=STFTConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
-    lstm: LSTMConfig = field(default_factory=LSTMConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     numeric: NumericConfig = field(default_factory=NumericConfig)

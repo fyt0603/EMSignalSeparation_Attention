@@ -55,10 +55,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=None, help="Override cfg.train.batch_size")
     parser.add_argument("--sir_db", type=float, default=None, help="Override cfg.train.sir_db")
     parser.add_argument(
+        "--mask_type",
+        type=str,
+        default=None,
+        help="Mask mode override: magnitude or complex (default: use config)",
+    )
+    parser.add_argument(
+        "--mask_bound",
+        type=float,
+        default=None,
+        help="Complex mask bound for mask_bound * tanh(raw_output) (default: use config)",
+    )
+    parser.add_argument(
         "--model_name",
         type=str,
         default=None,
-        choices=["resnet18d", "transformer", "lstm", "cnn"],
+        choices=["transformer", "cnn"],
         help="Override model name",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -72,34 +84,24 @@ def _resolve_model_name(args: argparse.Namespace) -> str:
 
 
 def _build_model(model_name: str, cfg: Any, device: torch.device) -> torch.nn.Module:
-    if model_name == "resnet18d":
-        from models.resnet18d import ResNet18DSeparator
+    if model_name != "transformer" and cfg.model.mask_type == "complex":
+        raise ValueError("complex mask is currently only supported for transformer model.")
 
-        model = ResNet18DSeparator(in_channels=1, out_masks=2)
-    elif model_name == "transformer":
+    if model_name == "transformer":
         from models.transformer import TransformerSeparator
 
+        out_masks = 4 if cfg.model.mask_type == "complex" else 2
         model = TransformerSeparator(
             in_channels=3,  # mix_feat: [logmag, sin_phi, cos_phi]
-            out_masks=2,
+            out_masks=out_masks,
+            mask_type=cfg.model.mask_type,
+            mask_bound=cfg.model.mask_bound,
             embed_dim=cfg.model.d_model,
             depth=cfg.model.num_layers,
             num_heads=cfg.model.n_heads,
             ff_dim=cfg.model.ff_dim,
             dropout=cfg.model.dropout,
             patch_size=cfg.model.patch_size,
-        )
-    elif model_name == "lstm":
-        from models.lstm import LSTMSeparator
-
-        model = LSTMSeparator(
-            in_channels=1,
-            out_masks=2,
-            input_freq_bins=cfg.stft.n_fft,
-            hidden_size=cfg.lstm.hidden_size,
-            num_layers=cfg.lstm.num_layers,
-            bidirectional=cfg.lstm.bidirectional,
-            dropout=cfg.lstm.dropout,
         )
     elif model_name == "cnn":
         from models.cnn import CNNSeparator
@@ -124,9 +126,16 @@ def main() -> None:
     from configs.config import get_default_config
     from data.dataset import DroneSeparationDataset
     from engine.trainer import train_one_epoch, validate_one_epoch
+    from losses.complex_mask_separation_loss import ComplexMaskSeparationLoss
     from losses.separation_loss import SeparationLoss
     args = parse_args()
     cfg = get_default_config()
+    if args.mask_type is not None:
+        if args.mask_type not in ("magnitude", "complex"):
+            raise ValueError(f"Unsupported mask_type: {args.mask_type}")
+        cfg.model.mask_type = args.mask_type
+    if args.mask_bound is not None:
+        cfg.model.mask_bound = float(args.mask_bound)
     _set_seed(args.seed)
 
     device = _build_device(args.device)
@@ -182,11 +191,18 @@ def main() -> None:
     )
 
     model = _build_model(model_name=model_name, cfg=cfg, device=device)
-    criterion = SeparationLoss(
-        mag_loss_weight=cfg.loss.mag_loss_weight,
-        mask_loss_weight=cfg.loss.mask_loss_weight,
-        corr_loss_weight=cfg.loss.corr_loss_weight,
-    ).to(device)
+    if cfg.model.mask_type == "complex":
+        criterion = ComplexMaskSeparationLoss(
+            mag_loss_weight=cfg.loss.mag_loss_weight,
+            mask_loss_weight=cfg.loss.mask_loss_weight,
+            corr_loss_weight=cfg.loss.corr_loss_weight,
+        ).to(device)
+    else:
+        criterion = SeparationLoss(
+            mag_loss_weight=cfg.loss.mag_loss_weight,
+            mask_loss_weight=cfg.loss.mask_loss_weight,
+            corr_loss_weight=cfg.loss.corr_loss_weight,
+        ).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=cfg.train.learning_rate,
@@ -200,11 +216,12 @@ def main() -> None:
 
     best_val_total = float("inf")
     history: List[Dict[str, Any]] = []
-    history_filename = f"train_history_{model_name}.json"
-    best_ckpt_filename = f"best_{model_name}.pt"
+    history_filename = f"train_history_{model_name}_{cfg.model.mask_type}.json"
+    best_ckpt_filename = f"best_{model_name}_{cfg.model.mask_type}.pt"
 
     print("=== Train Start ===")
     print(f"model={model_name}")
+    print(f"mask_type={cfg.model.mask_type}, mask_bound={cfg.model.mask_bound}")
     print(f"device={device}, epochs={epochs}, batch_size={batch_size}, sir_db={sir_db}")
     print(f"source_a={source_a_code}, source_b={source_b_code}")
     print(f"train_size={len(train_dataset)}, val_size={len(val_dataset)}")

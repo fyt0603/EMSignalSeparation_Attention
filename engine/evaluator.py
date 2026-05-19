@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Mapping
 
 import torch
 from torch.utils.data import DataLoader
+from data.complex_mask_utils import apply_complex_mask
 from data.stft_utils import istft_reconstruct
 from engine.metrics import complex_corr
 
@@ -83,7 +84,9 @@ def evaluate_separator(
     """评估分离模型并返回复相关系数指标。
 
     Args:
-        model: 分离模型，输入特征图 `mix_feat`，shape `[B,3,F,T]`，输出 `[B,2,F,T]`。
+        model: 分离模型，输入特征图 `mix_feat`，shape `[B,3,F,T]`，输出：
+            - magnitude: `[B,2,F,T]`
+            - complex: `[B,4,F,T]`
         dataloader: 验证或测试 dataloader。
         device: 计算设备。
         cfg: 配置对象（供 iSTFT 参数与 window_len 使用）。
@@ -112,11 +115,26 @@ def evaluate_separator(
         _validate_eval_shapes(batch)
 
         # 1) 模型推理预测 mask
-        pred_mask = model(batch["mix_feat"])  # [B, 2, F, T]
+        pred_mask = model(batch["mix_feat"])
 
-        # 2) 按 mask 与 mix_spec 重建预测源谱
-        pred_srcA_spec = pred_mask[:, 0, :, :] * batch["mix_spec"]  # [B, F, T]
-        pred_srcB_spec = pred_mask[:, 1, :, :] * batch["mix_spec"]  # [B, F, T]
+        # 2) 按 mask_type 与 mix_spec 重建预测源谱
+        mask_type = getattr(cfg.model, "mask_type", "magnitude")
+        if mask_type == "complex":
+            if pred_mask.ndim != 4 or pred_mask.shape[1] != 4:
+                raise ValueError(f"complex mode expects pred_mask [B,4,F,T], got {tuple(pred_mask.shape)}")
+            pred_srcA_spec, pred_srcB_spec = apply_complex_mask(
+                pred_mask,
+                batch["mix_spec"],
+            )
+        elif mask_type == "magnitude":
+            if pred_mask.ndim != 4 or pred_mask.shape[1] != 2:
+                raise ValueError(
+                    f"magnitude mode expects pred_mask [B,2,F,T], got {tuple(pred_mask.shape)}"
+                )
+            pred_srcA_spec = pred_mask[:, 0, :, :] * batch["mix_spec"]  # [B, F, T]
+            pred_srcB_spec = pred_mask[:, 1, :, :] * batch["mix_spec"]  # [B, F, T]
+        else:
+            raise ValueError(f"Unsupported mask_type: {mask_type}")
 
         # 3) iSTFT 恢复时域（复数）
         pred_srcA_time = istft_reconstruct(pred_srcA_spec, cfg=cfg, length=target_len)  # [B, N]

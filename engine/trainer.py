@@ -69,7 +69,16 @@ def _require_keys(batch: Mapping[str, Any]) -> None:
         raise KeyError(f"Batch missing required keys: {missing}")
 
 
-def _validate_shapes(batch: Mapping[str, Any]) -> None:
+def _get_expected_mask_channels(cfg: Any) -> int:
+    mask_type = getattr(getattr(cfg, "model", cfg), "mask_type", "magnitude")
+    if mask_type == "complex":
+        return 4
+    if mask_type == "magnitude":
+        return 2
+    raise ValueError(f"Unsupported mask_type: {mask_type}")
+
+
+def _validate_shapes(batch: Mapping[str, Any], cfg: Any) -> None:
     """检查当前数据格式是否满足训练链路约定。"""
     mix_feat = batch["mix_feat"]
     mix_spec = batch["mix_spec"]
@@ -78,12 +87,18 @@ def _validate_shapes(batch: Mapping[str, Any]) -> None:
     mask_target = batch["mask_target"]
     srcA_time = batch["srcA_time"]
     srcB_time = batch["srcB_time"]
+    expected_mask_channels = _get_expected_mask_channels(cfg)
 
     if not isinstance(mix_feat, torch.Tensor) or mix_feat.ndim != 4 or mix_feat.shape[1] != 3:
         raise ValueError(f"mix_feat must be [B,3,F,T], got {getattr(mix_feat, 'shape', None)}")
-    if not isinstance(mask_target, torch.Tensor) or mask_target.ndim != 4 or mask_target.shape[1] != 2:
+    if (
+        not isinstance(mask_target, torch.Tensor)
+        or mask_target.ndim != 4
+        or mask_target.shape[1] != expected_mask_channels
+    ):
         raise ValueError(
-            f"mask_target must be [B,2,F,T], got {getattr(mask_target, 'shape', None)}"
+            f"mask_target must be [B,{expected_mask_channels},F,T], "
+            f"got {getattr(mask_target, 'shape', None)}"
         )
 
     for name, spec in (("mix_spec", mix_spec), ("srcA_spec", srcA_spec), ("srcB_spec", srcB_spec)):
@@ -107,6 +122,19 @@ def _validate_shapes(batch: Mapping[str, Any]) -> None:
         raise ValueError("Batch size mismatch among srcA_time/srcB_time and mix_spec.")
 
 
+def _validate_pred_mask_shape(pred_mask: torch.Tensor, cfg: Any) -> None:
+    expected_mask_channels = _get_expected_mask_channels(cfg)
+    if (
+        not isinstance(pred_mask, torch.Tensor)
+        or pred_mask.ndim != 4
+        or pred_mask.shape[1] != expected_mask_channels
+    ):
+        raise ValueError(
+            f"pred_mask must be [B,{expected_mask_channels},F,T], "
+            f"got {getattr(pred_mask, 'shape', None)}"
+        )
+
+
 def train_one_epoch(
     model: torch.nn.Module,
     dataloader: DataLoader,
@@ -122,9 +150,10 @@ def train_one_epoch(
     for batch in dataloader:
         _require_keys(batch)
         batch = _move_batch_to_device(batch, device)
-        _validate_shapes(batch)
+        _validate_shapes(batch, cfg)
 
-        pred_mask = model(batch["mix_feat"])  # [B, 2, F, T]
+        pred_mask = model(batch["mix_feat"])
+        _validate_pred_mask_shape(pred_mask, cfg)
         loss_dict = criterion(
             pred_mask=pred_mask,
             target_mask=batch["mask_target"],
@@ -160,9 +189,10 @@ def validate_one_epoch(
         for batch in dataloader:
             _require_keys(batch)
             batch = _move_batch_to_device(batch, device)
-            _validate_shapes(batch)
+            _validate_shapes(batch, cfg)
 
-            pred_mask = model(batch["mix_feat"])  # [B, 2, F, T]
+            pred_mask = model(batch["mix_feat"])
+            _validate_pred_mask_shape(pred_mask, cfg)
             loss_dict = criterion(
                 pred_mask=pred_mask,
                 target_mask=batch["mask_target"],

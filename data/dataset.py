@@ -3,7 +3,7 @@
 职责：
 - 从 build_index.py 生成的窗口索引 JSON 中读取窗口元数据。
 - 按 drone_code 构建 source A/B 窗口池并进行在线混合。
-- 返回训练所需时域、频域及监督目标（IRM）。
+- 返回训练所需时域、频域及监督目标 mask（支持 magnitude IRM / complex mask）。
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import torch
 from torch.utils.data import Dataset
 
 from configs.config import ExperimentConfig, get_default_config
+from data.complex_mask_utils import compute_ideal_complex_mask
 from data.io_utils import read_complex_rf0
 from data.stft_utils import compute_stft, spec_to_input_features
 
@@ -179,15 +180,28 @@ class DroneSeparationDataset(Dataset):
         # 5) 输入特征（三通道 [log|X|, sinφ, cosφ]，shape [3, F, T]）
         mix_feat = spec_to_input_features(mix_spec, eps=self.eps)
 
-        # 6) 监督目标 IRM（基于缩放后真实源频谱）
-        mask_target = _build_irm(src_a_spec, src_b_spec, eps=self.eps)  # [2, F, T]
+        # 6) 监督目标 mask（按配置支持 magnitude/complex）
+        mask_type = getattr(self.cfg.model, "mask_type", "magnitude")
+        if mask_type == "complex":
+            mask_target = compute_ideal_complex_mask(
+                mix_spec=mix_spec,
+                srcA_spec=src_a_spec,
+                srcB_spec=src_b_spec,
+                eps=getattr(self.cfg.numeric, "eps", 1e-8),
+                mask_bound=getattr(self.cfg.model, "mask_bound", 5.0),
+            )
+        elif mask_type == "magnitude":
+            mask_target = _build_irm(src_a_spec, src_b_spec, eps=self.eps)
+        else:
+            raise ValueError(f"Unsupported mask_type: {mask_type}")
 
         return {
             "mix_feat": mix_feat.to(torch.float32),               # [3, F, T]
             "mix_spec": mix_spec.to(torch.complex64),             # [F, T]
             "srcA_spec": src_a_spec.to(torch.complex64),          # [F, T]
             "srcB_spec": src_b_spec.to(torch.complex64),          # [F, T]
-            "mask_target": mask_target.to(torch.float32),         # [2, F, T]
+            # magnitude: [2, F, T]；complex: [4, F, T]
+            "mask_target": mask_target.to(torch.float32),
             "srcA_time": torch.from_numpy(src_a_scaled),          # [N], complex64
             "srcB_time": torch.from_numpy(src_b_scaled),          # [N], complex64
             "sir_db": torch.tensor(self.sir_db, dtype=torch.float32),
