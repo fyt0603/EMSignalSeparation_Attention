@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import torch
+from torch import nn
 from torch.utils.data import DataLoader
 
 
@@ -82,18 +83,22 @@ def build_model(cfg: Any, device: torch.device) -> torch.nn.Module:
     return model.to(device)
 
 
-def load_checkpoint(model: torch.nn.Module, checkpoint_path: Path, device: torch.device) -> None:
+def load_checkpoint(model: nn.Module, checkpoint_path: Path, device: torch.device) -> None:
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     ckpt = torch.load(checkpoint_path, map_location=device)
     if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
-        model.load_state_dict(ckpt["model_state_dict"])
+        state_dict = ckpt["model_state_dict"]
     elif isinstance(ckpt, dict):
         # 兼容直接保存 state_dict 的情形
-        model.load_state_dict(ckpt)
+        state_dict = ckpt
     else:
         raise TypeError(f"Unsupported checkpoint format: {type(ckpt)}")
+
+    if not isinstance(state_dict, dict):
+        raise TypeError(f"state_dict must be dict, got {type(state_dict)}")
+    model.load_state_dict(state_dict)
 
 
 def build_test_loader(cfg: Any, sir_db: float, batch_size: int) -> DataLoader:
